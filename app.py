@@ -1,6 +1,9 @@
+import csv
+import io
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import cv2
 import numpy as np
@@ -13,6 +16,8 @@ from ultralytics import YOLO
 CFG = json.load(open("docs/config.json", encoding="utf-8"))
 CLASSES = CFG["classes"]
 MOBILE_LIVE_URL = "https://shakeeeeee.github.io/ai-qa-assistant/"
+# Streamlit Cloud 的主機是 UTC 時間，報告上的時間改成台灣時間
+TW = timezone(timedelta(hours=8))
 
 # log 會印在執行 streamlit 的終端機；Streamlit Cloud 在右下角「Manage app」看得到
 # 不要把金鑰或個人資料寫進 log
@@ -103,6 +108,31 @@ def summary(kept):
     return "、".join(f"{CLASSES[c]['name']} {n}" for c, n in sorted(counts.items()))
 
 
+def make_report(results, checked_at, conf, use_gpt):
+    """產生 CSV 報告：每個框一列，沒有框的照片也留一列「合格」"""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["檢查時間", "檔名", "照片結果", "類別", "算不算瑕疵", "YOLO 分數",
+                "GPT 看到", "GPT 理由", "框位置 (x1,y1,x2,y2)", "模型", "門檻"])
+    base = [checked_at.strftime("%Y-%m-%d %H:%M:%S")]
+    tail = [CFG["model_pt"].split("/")[-1] + ("＋" + CFG["gpt_model"] if use_gpt else ""), conf]
+    for name, _, found, checks, kept in results:
+        result = summary(kept) if kept else "合格"
+        if not found:
+            w.writerow(base + [name, result, "", "", "", "", "", ""] + tail)
+        for (box, s, c), ch in zip(found, checks):
+            w.writerow(base + [
+                name, result, CLASSES[c]["name"],
+                "是" if ch is None or ch["is_defect"] else "否（GPT 判斷不是）",
+                round(s, 2),
+                ch["what"] if ch else "沒有用 GPT",
+                ch["reason"] if ch else "",
+                " ".join(str(round(v)) for v in box),
+            ] + tail)
+    # Excel 要有 BOM（utf-8-sig）才會正確顯示中文，不然會變亂碼
+    return buf.getvalue().encode("utf-8-sig")
+
+
 tab_upload, tab_camera = st.tabs(["上傳照片", "鏡頭即時偵測"])
 
 with tab_upload:
@@ -123,6 +153,7 @@ with tab_upload:
         conf = CFG["conf_with_gpt"] if use_gpt else CFG["conf"]
         log.info("開始檢查 %d 張照片，GPT 確認=%s，門檻=%.2f", len(files), use_gpt, conf)
         t_all = time.time()
+        checked_at = datetime.now(TW)
         with st.spinner("檢查中..."):
             # 手機照片常常是「存成橫的＋標記要轉 90 度」，YOLO 會自己轉正，
             # 這裡也要先轉正，不然框的座標跟照片對不上
@@ -180,6 +211,14 @@ with tab_upload:
              for name, _, _, _, kept in results],
             width="stretch",
             hide_index=True,
+        )
+        # on_click="ignore"：按下載不會重跑整頁，結果才不會消失
+        st.download_button(
+            "下載檢查報告（CSV，Excel 可以開）",
+            make_report(results, checked_at, conf, use_gpt),
+            file_name=f"檢查報告_{checked_at:%Y%m%d_%H%M}.csv",
+            mime="text/csv",
+            on_click="ignore",
         )
 
         for name, out, found, checks, kept in results:
