@@ -16,6 +16,9 @@ labels_*/
 runs/
 yolov8n.pt
 
+# 金鑰
+.streamlit/secrets.toml
+
 # 其他
 __pycache__/
 .claude/

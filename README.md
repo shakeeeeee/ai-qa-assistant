@@ -20,6 +20,29 @@
 
 驗證集結果：precision 0.95、recall 0.68、mAP50 0.77
 
+## 用 GPT 做第二階段確認
+
+YOLO 門檻調低會多抓到刮傷，但也會框到很多不是刮傷的東西。所以上傳照片版加了第二階段：YOLO 先用比較低的門檻框出可疑位置，每個框裁成小圖交給 GPT（gpt-4.1-mini）判斷是刮傷，還是木紋、反光、髒污、文字。只保留 GPT 確認是刮傷的框。
+
+用 `eval_verify.py` 在驗證集上比較（框和標註的 IoU ≥ 0.5 才算抓對，共 40 個標註框）：
+
+| 設定 | precision | recall |
+|---|---|---|
+| YOLO 0.25 | 0.71 | 0.75 |
+| YOLO 0.25 + GPT | 0.79 | 0.75 |
+| YOLO 0.15 | 0.62 | 0.78 |
+| YOLO 0.15 + GPT（網頁使用的設定） | 0.72 | 0.78 |
+| YOLO 0.10 | 0.50 | 0.78 |
+| YOLO 0.10 + GPT | 0.60 | 0.78 |
+
+（這裡的 precision、recall 是在固定門檻下算的，跟上面 YOLO 訓練報告的數字算法不同，不能直接比）
+
+- GPT 在每個門檻都讓 precision 提高約 0.08～0.10，而且沒有刪掉任何一個正確的框
+- 剩下的錯誤大多是「框在刮傷上，但位置或大小跟標註差太多」，這是 YOLO 定位的問題，GPT 判斷內容是刮傷沒有錯，所以幫不上忙
+- 驗證集都是汽車照片。木頭桌子這類有紋路的表面才是 YOLO 最容易誤判的情況，還需要收集這類照片來測
+
+手機即時偵測版沒有加 GPT：每格畫面都問 GPT 太慢也太貴，而且公開網頁不能放 API 金鑰。
+
 ## 遇到的問題
 
 **第一版用了合成資料，結果模型學錯東西**
@@ -54,6 +77,8 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+要用 GPT 確認的話，建立 `.streamlit/secrets.toml`，寫入 `OPENAI_API_KEY = "你的金鑰"`。沒有設定就只會用 YOLO。
+
 重新訓練的話，先把 Roboflow 匯出的 YOLOv8 格式資料解壓到 `roboflow_data/`，然後：
 
 ```bash
@@ -74,6 +99,8 @@ yolo export model=models/scratch_v2.pt format=onnx imgsz=416 opset=12 simplify=T
 
 ```
 app.py              Streamlit 網頁
+verify.py           把 YOLO 的框裁成小圖交給 GPT 確認
+eval_verify.py      在驗證集上比較有沒有加 GPT 的差別
 docs/               手機即時偵測頁（GitHub Pages）和 ONNX 模型
 models/             訓練好的模型
 build_dataset.py    合併 Roboflow 資料和自己標的照片
