@@ -1,22 +1,25 @@
+import json
+
 import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image
 from ultralytics import YOLO
 
-CONF = 0.25          # 只用 YOLO 時的門檻
-CONF_WITH_GPT = 0.15  # 有 GPT 把關時，YOLO 門檻可以放低一點，少漏一些刮傷
-SOP_FILE = "data/sop/SOP-001-刮傷.txt"
+# 類別、SOP、模型路徑、門檻都寫在設定檔，換專案只要改設定檔
+# 放在 docs/ 底下是因為手機版網頁（GitHub Pages）也要讀同一份
+CFG = json.load(open("docs/config.json", encoding="utf-8"))
+CLASSES = CFG["classes"]
 MOBILE_LIVE_URL = "https://shakeeeeee.github.io/ai-qa-assistant/"
 
-st.set_page_config(page_title="AI 品檢助手")
-st.title("AI 品檢助手")
-st.write("上傳照片，檢查表面有沒有刮傷")
+st.set_page_config(page_title=CFG["title"])
+st.title(CFG["title"])
+st.write(f"上傳照片，檢查{CFG['product']}有沒有{'、'.join(c['name'] for c in CLASSES)}")
 
 
 @st.cache_resource
 def load_model():
-    return YOLO("models/scratch_v2.pt")
+    return YOLO(CFG["model_pt"])
 
 
 @st.cache_resource
@@ -37,29 +40,51 @@ model = load_model()
 key = get_key()
 gpt = load_gpt(key) if key else None
 
+# 模型的類別順序要跟設定檔一樣，不一樣就停下來，不然會對應到錯的 SOP
+model_ids = [model.names[i] for i in range(len(model.names))]
+if model_ids != [c["id"] for c in CLASSES]:
+    st.error(f"設定檔的類別 {[c['id'] for c in CLASSES]} 跟模型的類別 {model_ids} 不一樣，"
+             "請修改 docs/config.json 的 classes，順序也要相同")
+    st.stop()
+
+
+def bgr(hex_color):
+    h = hex_color.lstrip("#")
+    return int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16)
+
 
 def detect(image, conf):
-    """回傳 [(框, 分數), ...]，分數由高到低"""
-    result = model.predict(image, conf=conf, verbose=False)[0]
-    return [(b.tolist(), float(c)) for b, c in zip(result.boxes.xyxy, result.boxes.conf)]
+    """回傳 [(框, 分數, 類別編號), ...]，分數由高到低"""
+    r = model.predict(image, conf=conf, verbose=False)[0]
+    return [(b.tolist(), float(s), int(c)) for b, s, c in zip(r.boxes.xyxy, r.boxes.conf, r.boxes.cls)]
 
 
 def draw(image: Image.Image, kept, rejected):
-    """紅框是刮傷；灰框是 YOLO 有框到、但 GPT 判斷不是刮傷的"""
+    """依類別顏色畫框；灰框是 YOLO 有框到、但 GPT 判斷不是瑕疵的"""
     img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     lw = max(2, img.shape[1] // 300)
-    for (x1, y1, x2, y2), _ in rejected:
+    for (x1, y1, x2, y2), _, _ in rejected:
         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (160, 160, 160), lw)
-    for (x1, y1, x2, y2), s in kept:
-        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), lw)
-        cv2.putText(img, f"{s:.2f}", (int(x1), max(20, int(y1) - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, lw * 0.4, (0, 0, 255), lw)
+    for (x1, y1, x2, y2), s, c in kept:
+        color = bgr(CLASSES[c]["color"])
+        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, lw)
+        # putText 不支援中文，所以標英文 id
+        cv2.putText(img, f"{CLASSES[c]['id']} {s:.2f}", (int(x1), max(20, int(y1) - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, lw * 0.4, color, lw)
     return img
 
 
-def read_sop():
-    with open(SOP_FILE, encoding="utf-8") as f:
+def read_sop(c):
+    with open(CLASSES[c]["sop"], encoding="utf-8") as f:
         return f.read()
+
+
+def summary(kept):
+    """例如：刮傷 2、髒污 1"""
+    counts = {}
+    for _, _, c in kept:
+        counts[c] = counts.get(c, 0) + 1
+    return "、".join(f"{CLASSES[c]['name']} {n}" for c, n in sorted(counts.items()))
 
 
 tab_upload, tab_camera = st.tabs(["上傳照片", "鏡頭即時偵測"])
@@ -74,15 +99,14 @@ with tab_upload:
         "用 GPT 再確認一次",
         value=gpt is not None,
         disabled=gpt is None,
-        help="YOLO 先把可疑的地方都框出來，再把每個框裁成小圖給 GPT 判斷是刮傷、"
-             "還是木紋、反光、髒污。驗證集上 precision 0.62 → 0.72，recall 不變（0.78）。"
+        help="YOLO 先把可疑的地方都框出來，再把每個框裁成小圖給 GPT 判斷是不是真的瑕疵。"
              "會多花 2～4 秒，多張照片是同時送出，不會一張一張累加。",
     )
 
     if files and st.button(f"開始檢查（{len(files)} 張）"):
         with st.spinner("檢查中..."):
             images = [Image.open(f).convert("RGB") for f in files]
-            founds = [detect(img, CONF_WITH_GPT if use_gpt else CONF) for img in images]
+            founds = [detect(img, CFG["conf_with_gpt"] if use_gpt else CFG["conf"]) for img in images]
             checks_all = [[None] * len(found) for found in founds]
 
             if use_gpt:
@@ -93,7 +117,9 @@ with tab_upload:
                     if not founds[i]:
                         return i, None, None
                     try:
-                        return i, verify_boxes(gpt, images[i], [b for b, _ in founds[i]]), None
+                        boxes = [b for b, _, _ in founds[i]]
+                        labels = [CLASSES[c]["name"] for _, _, c in founds[i]]
+                        return i, verify_boxes(gpt, images[i], boxes, labels, CFG), None
                     except Exception as e:
                         return i, None, e
 
@@ -107,42 +133,47 @@ with tab_upload:
 
         results = []
         for f, image, found, checks in zip(files, images, founds, checks_all):
-            kept = [(b, s) for (b, s), c in zip(found, checks) if c is None or c["is_scratch"]]
-            rejected = [(b, s) for (b, s), c in zip(found, checks) if c is not None and not c["is_scratch"]]
-            results.append((f.name, draw(image, kept, rejected), found, checks, [s for _, s in kept]))
+            kept = [d for d, ch in zip(found, checks) if ch is None or ch["is_defect"]]
+            rejected = [d for d, ch in zip(found, checks) if ch is not None and not ch["is_defect"]]
+            results.append((f.name, draw(image, kept, rejected), found, checks, kept))
 
-        bad = [r[0] for r in results if r[4]]
+        bad = [r for r in results if r[4]]
         st.subheader("檢查結果")
-        st.write(f"共 {len(results)} 張，有刮傷 {len(bad)} 張，合格 {len(results) - len(bad)} 張")
+        st.write(f"共 {len(results)} 張，有瑕疵 {len(bad)} 張，合格 {len(results) - len(bad)} 張")
         # 手機畫面窄，表格只放兩欄
         st.dataframe(
-            [{"檔名": name, "結果": f"刮傷 {len(s)} 處（{s[0]:.2f}）" if s else "合格"}
-             for name, _, _, _, s in results],
+            [{"檔名": name, "結果": summary(kept) if kept else "合格"}
+             for name, _, _, _, kept in results],
             use_container_width=True,
             hide_index=True,
         )
 
-        for name, out, found, checks, scores in results:
-            with st.expander(f"{'有刮傷' if scores else '合格'}｜{name}", expanded=bool(scores)):
+        for name, out, found, checks, kept in results:
+            with st.expander(f"{'有瑕疵' if kept else '合格'}｜{name}", expanded=bool(kept)):
                 st.image(out, channels="BGR", use_container_width=True)
                 if use_gpt and any(checks):
-                    st.caption("紅框：確認是刮傷　灰框：GPT 判斷不是刮傷")
+                    st.caption("彩色框：確認是瑕疵　灰框：GPT 判斷不是")
                     st.dataframe(
-                        [{"YOLO 分數": round(s, 2),
-                          "是刮傷嗎": ("是" if c["is_scratch"] else "不是") + f"（{c['what']}）",
-                          "理由": c["reason"]}
-                         for (_, s), c in zip(found, checks) if c],
+                        [{"類別": CLASSES[c]["name"],
+                          "YOLO 分數": round(s, 2),
+                          "GPT 確認": ("是" if ch["is_defect"] else "不是") + f"（{ch['what']}）",
+                          "理由": ch["reason"]}
+                         for (_, s, c), ch in zip(found, checks) if ch],
                         use_container_width=True,
                         hide_index=True,
                     )
-                elif scores:
-                    st.write(f"找到 {len(scores)} 處，最高信心分數 {scores[0]:.2f}")
+                elif kept:
+                    st.write(summary(kept))
 
-        if bad:
+        # 每一種有出現的瑕疵，各顯示一次它的 SOP
+        found_classes = sorted({c for r in bad for _, _, c in r[4]})
+        if found_classes:
             st.subheader("處理方式")
-            st.write(f"有刮傷的照片：{'、'.join(bad)}")
-            st.write(read_sop())
-            st.caption("依據 SOP-001")
+            for c in found_classes:
+                names = [r[0] for r in bad if any(k[2] == c for k in r[4])]
+                st.markdown(f"**{CLASSES[c]['name']}**（{'、'.join(names)}）")
+                st.write(read_sop(c))
+                st.caption(f"依據 {CLASSES[c]['sop'].split('/')[-1]}")
 
 with tab_camera:
     # 原本用 streamlit-webrtc 把畫面傳到這台伺服器偵測，放上雲端後很卡，
@@ -150,5 +181,6 @@ with tab_camera:
     st.write("即時偵測在另一個頁面，模型直接在你的手機或電腦上跑，畫面不用上傳，比較順。")
     st.link_button("開啟即時偵測", MOBILE_LIVE_URL, type="primary")
     st.caption("手機、電腦都可以用。電腦需要有網路攝影機；沒有的話可以在那個頁面用照片測試。")
-    with st.expander("SOP-001 刮傷處理方式"):
-        st.write(read_sop())
+    for c, cls in enumerate(CLASSES):
+        with st.expander(f"{cls['name']}的處理方式"):
+            st.write(read_sop(c))

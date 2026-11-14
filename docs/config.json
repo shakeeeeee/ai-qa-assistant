@@ -1,0 +1,20 @@
+{
+  "title": "AI 品檢助手",
+  "product": "汽車烤漆表面",
+  "classes": [
+    {
+      "id": "scratch",
+      "name": "刮傷",
+      "color": "#ff4d4f",
+      "sop": "data/sop/SOP-001-刮傷.txt"
+    }
+  ],
+  "model_pt": "models/scratch_v2.pt",
+  "model_onnx": "scratch_v2.onnx",
+  "onnx_imgsz": 416,
+  "conf": 0.25,
+  "conf_with_gpt": 0.15,
+  "gpt_model": "gpt-4.1-mini",
+  "note": "YOLOv8n，用 292 張汽車刮傷照片訓練（驗證集 mAP50 0.77），輸入 416×416，用 onnxruntime-web 執行。訓練資料以汽車烤漆為主，其他材質的表現會比較差。",
+  "gpt_confusing":"材質本身的紋路（例如木紋）、反光、灰塵、印刷文字或圖案、零件之間的縫隙或邊緣、陰影"
+}

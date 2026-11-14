@@ -67,6 +67,28 @@ YOLO 門檻調低會多抓到刮傷，但也會框到很多不是刮傷的東西
 - 加入髒污、印刷偏移等其他類別（SOP 已經先寫好了）
 - 用 RAG 依照瑕疵類型查 SOP，再用 LLM 整理成檢查報告
 
+## 設定檔
+
+類別、SOP、模型路徑、門檻都寫在 `docs/config.json`，Streamlit 版和手機版共用同一份。換一種瑕疵或產品時，訓練好新模型後只要改這個檔案：
+
+```json
+{
+  "product": "汽車烤漆表面",
+  "classes": [
+    { "id": "scratch", "name": "刮傷", "color": "#ff4d4f", "sop": "data/sop/SOP-001-刮傷.txt" }
+  ],
+  "model_pt": "models/scratch_v2.pt",
+  "model_onnx": "scratch_v2.onnx",
+  "onnx_imgsz": 416,
+  "conf": 0.25,
+  "conf_with_gpt": 0.15
+}
+```
+
+- `classes` 的順序要跟訓練時 `dataset.yaml` 的類別編號一樣，`id` 要跟 yaml 的名稱一樣
+- 兩邊對不上的話，網頁會直接顯示錯誤，不會默默對到錯的 SOP
+- 放在 `docs/` 底下是因為 GitHub Pages 只會公開這個資料夾，手機版才讀得到
+
 ## 在自己電腦執行
 
 ```bash
@@ -102,6 +124,7 @@ app.py              Streamlit 網頁
 verify.py           把 YOLO 的框裁成小圖交給 GPT 確認
 eval_verify.py      在驗證集上比較有沒有加 GPT 的差別
 docs/               手機即時偵測頁（GitHub Pages）和 ONNX 模型
+docs/config.json    類別、SOP、模型路徑、門檻的設定（兩個版本共用）
 models/             訓練好的模型
 build_dataset.py    合併 Roboflow 資料和自己標的照片
 dataset_v2.yaml     訓練用的資料集設定

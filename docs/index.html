@@ -47,8 +47,8 @@
 </head>
 <body>
 <main>
-  <h1>刮傷即時偵測</h1>
-  <p class="sub">打開鏡頭對著物品表面，偵測到刮傷會直接框出來。模型在手機的瀏覽器裡跑，畫面不會上傳。</p>
+  <h1 id="title">瑕疵即時偵測</h1>
+  <p class="sub">打開鏡頭對著物品表面，偵測到瑕疵會直接框出來。模型在手機的瀏覽器裡跑，畫面不會上傳。</p>
 
   <div class="stage" id="stage">
     <video id="video" playsinline muted></video>
@@ -71,7 +71,7 @@
 
   <div class="links" id="links"></div>
 
-  <p class="note">YOLOv8n，用 292 張汽車刮傷照片訓練（驗證集 mAP50 0.77），輸入 416×416，用 onnxruntime-web 執行。訓練資料以汽車烤漆為主，其他材質的表現會比較差。</p>
+  <p class="note" id="note"></p>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
@@ -80,13 +80,14 @@
 const STREAMLIT_URL = "https://shakeeeeee-scratch.streamlit.app/";
 const REPO_URL = "https://github.com/shakeeeeee/ai-qa-assistant";
 
-const SIZE = 416;          // 模型輸入尺寸
 const IOU = 0.45;          // 重疊太多的框只留一個
 const $ = (id) => document.getElementById(id);
 const video = $("video"), view = $("view"), ctx = view.getContext("2d");
-const prep = document.createElement("canvas"); prep.width = prep.height = SIZE;
+const prep = document.createElement("canvas");
 const pctx = prep.getContext("2d", { willReadFrequently: true });
 
+// 類別、模型檔名、輸入尺寸都從 config.json 讀（跟 Streamlit 版共用同一份）
+let CFG = null, SIZE = 416, NC = 1;
 let session = null, stream = null, facing = "environment", running = false, busy = false;
 let boxes = [], conf = 0.25, lastTimes = [];
 
@@ -103,7 +104,18 @@ ort.env.wasm.numThreads = 1;
 
 async function loadModel() {
   try {
-    session = await ort.InferenceSession.create("scratch_v2.onnx", { executionProviders: ["wasm"] });
+    CFG = await (await fetch("config.json", { cache: "no-cache" })).json();
+    SIZE = CFG.onnx_imgsz; NC = CFG.classes.length;
+    prep.width = prep.height = SIZE;
+    conf = CFG.conf; $("conf").value = conf; $("confVal").textContent = conf.toFixed(2);
+    const names = CFG.classes.map((c) => c.name).join("、");
+    $("title").textContent = `${names}即時偵測`; document.title = `${names}即時偵測`;
+    $("note").textContent = CFG.note || "";
+
+    session = await ort.InferenceSession.create(CFG.model_onnx, { executionProviders: ["wasm"] });
+    // 先跑一次空白圖，確認模型輸出的類別數跟設定檔一樣
+    const rows = (await session.run({ images: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) })).output0.dims[1];
+    if (rows !== 4 + NC) throw new Error(`模型有 ${rows - 4} 個類別，但 config.json 寫了 ${NC} 個`);
     $("startBtn").disabled = false; $("startBtn").textContent = "開啟鏡頭";
   } catch (e) {
     $("startBtn").textContent = "模型載入失敗"; $("status").textContent = String(e);
@@ -133,19 +145,25 @@ function iou(a, b) {
 
 async function detect(src, w, h) {
   const { tensor, scale, px, py } = preprocess(src, w, h);
-  const out = (await session.run({ images: tensor })).output0;   // [1, 5, N]：cx, cy, w, h, 分數
+  // 輸出是 [1, 4 + 類別數, N]：前 4 列是 cx, cy, w, h，後面每一列是一個類別的分數
+  const out = (await session.run({ images: tensor })).output0;
   const N = out.dims[2], d = out.data, found = [];
   for (let i = 0; i < N; i++) {
-    const s = d[4 * N + i];
+    let s = 0, c = 0;
+    for (let k = 0; k < NC; k++) {               // 取分數最高的類別
+      const v = d[(4 + k) * N + i];
+      if (v > s) { s = v; c = k; }
+    }
     if (s < conf) continue;
     const cx = d[i], cy = d[N + i], bw = d[2 * N + i], bh = d[3 * N + i];
-    found.push({ s,
+    found.push({ s, c,
       x1: (cx - bw / 2 - px) / scale, y1: (cy - bh / 2 - py) / scale,
       x2: (cx + bw / 2 - px) / scale, y2: (cy + bh / 2 - py) / scale });
   }
   found.sort((a, b) => b.s - a.s);
   const keep = [];
-  for (const b of found) if (keep.every((k) => iou(k, b) < IOU)) keep.push(b);
+  // 同一類別的框重疊太多才合併（跟 YOLO 預設一樣）
+  for (const b of found) if (keep.every((k) => k.c !== b.c || iou(k, b) < IOU)) keep.push(b);
   return keep;
 }
 
@@ -158,17 +176,22 @@ function draw(src, w, h) {
   const lw = Math.max(3, Math.round(w / 160)), fs = Math.max(16, Math.round(w / 28));
   ctx.lineWidth = lw; ctx.font = `bold ${fs}px system-ui, sans-serif`;
   for (const b of boxes) {
-    ctx.strokeStyle = "#ff4d4f"; ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
-    const t = `刮傷 ${b.s.toFixed(2)}`, tw = ctx.measureText(t).width + 10;
+    const cls = CFG.classes[b.c];
+    ctx.strokeStyle = cls.color; ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+    const t = `${cls.name} ${b.s.toFixed(2)}`, tw = ctx.measureText(t).width + 10;
     const ty = Math.max(0, b.y1 - fs - 6);
-    ctx.fillStyle = "#ff4d4f"; ctx.fillRect(b.x1 - lw / 2, ty, tw, fs + 6);
+    ctx.fillStyle = cls.color; ctx.fillRect(b.x1 - lw / 2, ty, tw, fs + 6);
     ctx.fillStyle = "#fff"; ctx.fillText(t, b.x1 + 4, ty + fs);
   }
   const bad = boxes.length > 0;
   $("stage").classList.toggle("alert", bad);
   $("banner").hidden = false;
   $("banner").className = "banner " + (bad ? "bad" : "good");
-  $("bannerText").textContent = bad ? `⚠️ 發現 ${boxes.length} 處刮傷（最高 ${boxes[0].s.toFixed(2)}）` : "✅ 目前沒有發現刮傷";
+  // 例如：發現 刮傷 2、髒污 1
+  const counts = {};
+  for (const b of boxes) counts[b.c] = (counts[b.c] || 0) + 1;
+  const text = Object.keys(counts).sort().map((c) => `${CFG.classes[c].name} ${counts[c]}`).join("、");
+  $("bannerText").textContent = bad ? `⚠️ 發現 ${text}` : "✅ 目前沒有發現瑕疵";
 }
 
 async function tick() {
