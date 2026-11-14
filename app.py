@@ -22,18 +22,22 @@ def load_model():
 
 
 @st.cache_resource
-def load_gpt():
-    """有設定 OPENAI_API_KEY 才會回傳 client，沒有就回傳 None"""
-    try:
-        key = st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        return None
+def load_gpt(key):
     from openai import OpenAI
     return OpenAI(api_key=key)
 
 
+def get_key():
+    # 每次都重新讀，之後才補上金鑰也不用重新啟動
+    try:
+        return st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        return None
+
+
 model = load_model()
-gpt = load_gpt()
+key = get_key()
+gpt = load_gpt(key) if key else None
 
 
 def detect(image, conf):
