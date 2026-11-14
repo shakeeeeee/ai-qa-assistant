@@ -1,9 +1,7 @@
-import av
 import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image
-from streamlit_webrtc import webrtc_streamer
 from ultralytics import YOLO
 
 CONF = 0.25          # 只用 YOLO 時的門檻
@@ -62,19 +60,6 @@ def draw(image: Image.Image, kept, rejected):
 def read_sop():
     with open(SOP_FILE, encoding="utf-8") as f:
         return f.read()
-
-
-def live_frame(frame: av.VideoFrame) -> av.VideoFrame:
-    img = frame.to_ndarray(format="bgr24")
-    result = model.predict(img, conf=CONF, verbose=False)[0]
-    out = result.plot()
-    if len(result.boxes):
-        h, w = out.shape[:2]
-        cv2.rectangle(out, (0, 0), (w - 1, h - 1), (0, 0, 255), 8)
-        # putText 不支援中文
-        cv2.putText(out, f"SCRATCH x{len(result.boxes)}", (16, 44),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3)
-    return av.VideoFrame.from_ndarray(out, format="bgr24")
 
 
 tab_upload, tab_camera = st.tabs(["上傳照片", "鏡頭即時偵測"])
@@ -160,15 +145,10 @@ with tab_upload:
             st.caption("依據 SOP-001")
 
 with tab_camera:
-    st.write("手機請用這個版本，模型直接在手機上跑，比較順：")
-    st.link_button("開啟手機版", MOBILE_LIVE_URL, type="primary")
-    st.divider()
-    st.caption("電腦版：按 START 開啟網路攝影機，偵測到刮傷時畫面外框會變紅")
-    webrtc_streamer(
-        key="live",
-        video_frame_callback=live_frame,
-        media_stream_constraints={"video": True, "audio": False},
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    )
+    # 原本用 streamlit-webrtc 把畫面傳到這台伺服器偵測，放上雲端後很卡，
+    # 改成讓模型直接在使用者的瀏覽器裡跑（docs/index.html）
+    st.write("即時偵測在另一個頁面，模型直接在你的手機或電腦上跑，畫面不用上傳，比較順。")
+    st.link_button("開啟即時偵測", MOBILE_LIVE_URL, type="primary")
+    st.caption("手機、電腦都可以用。電腦需要有網路攝影機；沒有的話可以在那個頁面用照片測試。")
     with st.expander("SOP-001 刮傷處理方式"):
         st.write(read_sop())
