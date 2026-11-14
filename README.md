@@ -7,7 +7,7 @@
 | | 網址 | 說明 |
 |---|---|---|
 | 📱 手機即時偵測 | https://shakeeeeee.github.io/ai-qa-assistant/ | 用手機打開，鏡頭掃到刮傷就會直接框出來。模型在手機的瀏覽器裡執行（ONNX Runtime Web），影像不會上傳。 |
-| 📁 完整版 | （Streamlit Cloud，部署後補上） | 一次上傳多張照片、檢查總表、SOP 處理報告 |
+| 📁 完整版 | https://ai-app-assistant-94m3b6tv2ebo5uwauebfzx.streamlit.app/ | 一次上傳多張照片、檢查總表、SOP 處理報告 |
 
 ## 1. 功能
 
