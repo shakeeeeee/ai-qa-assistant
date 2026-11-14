@@ -91,28 +91,40 @@ with tab_upload:
         disabled=gpt is None,
         help="YOLO 先把可疑的地方都框出來，再把每個框裁成小圖給 GPT 判斷是刮傷、"
              "還是木紋、反光、髒污。驗證集上 precision 0.62 → 0.72，recall 不變（0.78）。"
-             "每張照片多 2～4 秒。",
+             "會多花 2～4 秒，多張照片是同時送出，不會一張一張累加。",
     )
 
     if files and st.button(f"開始檢查（{len(files)} 張）"):
-        if use_gpt:
-            from verify import verify_boxes
-        bar = st.progress(0.0)
+        with st.spinner("檢查中..."):
+            images = [Image.open(f).convert("RGB") for f in files]
+            founds = [detect(img, CONF_WITH_GPT if use_gpt else CONF) for img in images]
+            checks_all = [[None] * len(found) for found in founds]
+
+            if use_gpt:
+                from concurrent.futures import ThreadPoolExecutor
+                from verify import verify_boxes
+
+                def ask(i):
+                    if not founds[i]:
+                        return i, None, None
+                    try:
+                        return i, verify_boxes(gpt, images[i], [b for b, _ in founds[i]]), None
+                    except Exception as e:
+                        return i, None, e
+
+                # GPT 一張要 2 秒左右，一張一張問太慢，所以同時送出
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    for i, checks, err in pool.map(ask, range(len(images))):
+                        if checks:
+                            checks_all[i] = checks
+                        if err:
+                            st.warning(f"{files[i].name}：GPT 確認失敗，改用 YOLO 的結果（{err}）")
+
         results = []
-        for i, f in enumerate(files):
-            image = Image.open(f).convert("RGB")
-            found = detect(image, CONF_WITH_GPT if use_gpt else CONF)
-            checks = [None] * len(found)
-            if use_gpt and found:
-                try:
-                    checks = verify_boxes(gpt, image, [b for b, _ in found])
-                except Exception as e:
-                    st.warning(f"{f.name}：GPT 確認失敗，改用 YOLO 的結果（{e}）")
+        for f, image, found, checks in zip(files, images, founds, checks_all):
             kept = [(b, s) for (b, s), c in zip(found, checks) if c is None or c["is_scratch"]]
             rejected = [(b, s) for (b, s), c in zip(found, checks) if c is not None and not c["is_scratch"]]
             results.append((f.name, draw(image, kept, rejected), found, checks, [s for _, s in kept]))
-            bar.progress((i + 1) / len(files), text=f"{i + 1} / {len(files)}")
-        bar.empty()
 
         bad = [r[0] for r in results if r[4]]
         st.subheader("檢查結果")
