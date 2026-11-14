@@ -93,21 +93,22 @@ with tab_upload:
         # 總表
         failed = [name for name, _, s in results if s]
         st.subheader("📊 檢查總表")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("總張數", len(results))
-        c2.metric("有刮傷", len(failed))
-        c3.metric("沒問題", len(results) - len(failed))
+        # 用一行文字而不是 st.columns，手機上才不會變成直排佔掉整個畫面
+        st.markdown(
+            f"共 **{len(results)}** 張　｜　❌ 有刮傷 **{len(failed)}** 張　｜　"
+            f"✅ 合格 **{len(results) - len(failed)}** 張"
+        )
+        # 只留兩欄，手機寬度也放得下，不用左右滑
         st.dataframe(
             [
                 {
                     "檔名": name,
-                    "結果": "❌ 有刮傷" if s else "✅ 合格",
-                    "刮傷數": len(s),
-                    "最高確定度": round(s[0], 2) if s else None,
+                    "結果": f"❌ {len(s)} 處（{s[0]:.2f}）" if s else "✅ 合格",
                 }
                 for name, _, s in results
             ],
             use_container_width=True,
+            hide_index=True,
         )
 
         # 每張的細節（有刮傷的預設展開）
