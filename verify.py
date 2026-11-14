@@ -48,8 +48,11 @@ def crop_box(image: Image.Image, box, pad=0.4, min_size=96, max_size=384) -> Ima
     x1, y1, x2, y2 = box
     w, h = x2 - x1, y2 - y1
     px, py = max(w * pad, min_size / 2), max(h * pad, min_size / 2)
-    crop = image.crop((max(0, x1 - px), max(0, y1 - py),
-                       min(image.width, x2 + px), min(image.height, y2 + py)))
+    left, top = max(0, x1 - px), max(0, y1 - py)
+    right, bottom = min(image.width, x2 + px), min(image.height, y2 + py)
+    if right - left < 1 or bottom - top < 1:
+        raise ValueError(f"框 {box} 不在照片範圍 {image.size} 內，可能是照片方向沒有轉正")
+    crop = image.crop((left, top, right, bottom))
     crop.thumbnail((max_size, max_size))
     return crop
 

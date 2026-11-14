@@ -3,7 +3,7 @@ import json
 import cv2
 import numpy as np
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 from ultralytics import YOLO
 
 # 類別、SOP、模型路徑、門檻都寫在設定檔，換專案只要改設定檔
@@ -105,7 +105,9 @@ with tab_upload:
 
     if files and st.button(f"開始檢查（{len(files)} 張）"):
         with st.spinner("檢查中..."):
-            images = [Image.open(f).convert("RGB") for f in files]
+            # 手機照片常常是「存成橫的＋標記要轉 90 度」，YOLO 會自己轉正，
+            # 這裡也要先轉正，不然框的座標跟照片對不上
+            images = [ImageOps.exif_transpose(Image.open(f)).convert("RGB") for f in files]
             founds = [detect(img, CFG["conf_with_gpt"] if use_gpt else CFG["conf"]) for img in images]
             checks_all = [[None] * len(found) for found in founds]
 

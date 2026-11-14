@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 from openai import OpenAI
-from PIL import Image
+from PIL import Image, ImageOps
 from ultralytics import YOLO
 
 from verify import verify_boxes
@@ -60,7 +60,7 @@ def main():
     totals = {k: [0, 0, 0] for k in settings}
 
     for img_path in sorted((VAL / "images" / "val").iterdir()):
-        img = Image.open(img_path).convert("RGB")
+        img = ImageOps.exif_transpose(Image.open(img_path)).convert("RGB")
         gts = load_gt(VAL / "labels" / "val" / f"{img_path.stem}.txt", img.width, img.height)
         r = model.predict(img, conf=LOW_CONF, verbose=False)[0]
         boxes = [b.tolist() for b in r.boxes.xyxy]
