@@ -1,21 +1,50 @@
 # AI 品檢助手
 
-用 YOLOv8 自動檢查產品表面有沒有刮傷，找出對應的 SOP，並產出檢查報告。
+拍一張產品照片，讓模型找出表面的刮傷，再依照 SOP 給出處理方式。
 
-## 🔗 線上展示
+這是我自學 Python 和電腦視覺時做的練習專案，目前只做「刮傷」一種瑕疵。
 
-| | 網址 | 說明 |
-|---|---|---|
-| 📱 手機即時偵測 | https://shakeeeeee.github.io/ai-qa-assistant/ | 用手機打開，鏡頭掃到刮傷就會直接框出來。模型在手機的瀏覽器裡執行（ONNX Runtime Web），影像不會上傳。 |
-| 📁 完整版 | https://ai-app-assistant-94m3b6tv2ebo5uwauebfzx.streamlit.app/ | 一次上傳多張照片、檢查總表、SOP 處理報告 |
+## Demo
 
-## 1. 功能
+- 手機即時偵測：https://shakeeeeee.github.io/ai-qa-assistant/
+  （打開鏡頭對著物品掃，有刮傷會直接框出來。沒有鏡頭的話可以按「用照片測試」）
+- 上傳照片版：https://ai-app-assistant-94m3b6tv2ebo5uwauebfzx.streamlit.app/
+  （可以一次傳多張，會列出哪幾張有刮傷，並顯示 SOP。Streamlit 免費版閒置會休眠，第一次打開要等一下）
 
-- **多張照片檢測**：一次上傳多張照片，產生總表（幾張合格、幾張有刮傷），有刮傷的照片會附上 SOP 處理方式
-- **電腦鏡頭即時偵測**：Streamlit + WebRTC，每一格畫面都會檢查
-- **手機鏡頭即時偵測**：模型轉成 ONNX 格式，在手機瀏覽器裡直接推論，不需要伺服器（`docs/`）
+## 做法
 
-## 2. 怎麼在自己電腦跑起來？
+1. 用 YOLOv8n 做物件偵測，只有一個類別 `scratch`
+2. 訓練資料是 Roboflow 上的汽車刮傷資料集，加上我自己用 makesense.ai 標的照片，共 292 張（訓練 264、驗證 28）
+3. 網頁用 Streamlit 寫，偵測到刮傷就讀取 `data/sop/` 裡對應的 SOP
+4. 手機版是把模型轉成 ONNX，用 onnxruntime-web 在瀏覽器裡跑，所以不用架伺服器，影像也不會上傳
+
+驗證集結果：precision 0.95、recall 0.68、mAP50 0.77
+
+## 遇到的問題
+
+**第一版用了合成資料，結果模型學錯東西**
+
+一開始真實照片不夠，我用程式產生了 80 張「白底黑線」的圖當刮傷。驗證分數有 0.99，但驗證集也是合成圖，所以這個分數沒有意義。拿真的照片測試時，模型把新聞截圖右上角的浮水印文字框成刮傷，真正的刮傷反而沒抓到。它學到的是「細線」，不是「刮傷」。
+
+後來拿掉合成圖，只用真實照片訓練，驗證集也換成真實照片，才比較能反映實際表現。
+
+**手機版要在手機上跑得動**
+
+一開始是用 streamlit-webrtc 把鏡頭畫面傳到伺服器再偵測，在電腦上可以用，但手機瀏覽器要 HTTPS 才能開鏡頭。如果放到雲端，影像要一路傳到免費主機去跑，還要另外設定 TURN 伺服器，速度和連線都不穩。所以改成把模型匯出成 ONNX，直接在手機的瀏覽器裡執行。輸入尺寸從 640 降到 416，驗證集 mAP50 幾乎沒變（0.767 → 0.769），但運算量少了一半以上。
+
+## 目前的限制
+
+- 資料大多是銀色汽車烤漆。我用手機對著木頭桌子測試，門檻調低會框到很多木紋，調高又什麼都抓不到，表示換了材質模型就不太行
+- recall 只有 0.68，大約三分之一的刮傷會漏掉
+- SOP 目前是固定讀一份文字檔，還沒有依照瑕疵類型或嚴重程度去查
+
+## 接下來想做
+
+- 補不同材質（木頭、塑膠、金屬、手機螢幕）的刮傷照片，也加一些沒有刮傷但有紋路的照片，減少誤判
+- 加入髒污、印刷偏移等其他類別（SOP 已經先寫好了）
+- 用 RAG 依照瑕疵類型查 SOP，再用 LLM 整理成檢查報告
+
+## 在自己電腦執行
 
 ```bash
 pip install -r requirements.txt
@@ -25,65 +54,39 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## 3. 模型是怎麼訓練的？
+重新訓練的話，先把 Roboflow 匯出的 YOLOv8 格式資料解壓到 `roboflow_data/`，然後：
 
-- 基礎模型：`yolov8n.pt`
-- 資料：`python build_dataset.py` 會把 Roboflow 匯出的資料集（`roboflow_data/`）和自己用 makesense.ai 標的照片合併成 `dataset_v2/`
-  - 訓練 264 張、驗證 28 張，全部是真實照片
-  - 照片的版權不屬於本專案，所以沒有放進 repo
-- 訓練指令：
+```bash
+python build_dataset.py
+```
 
-  ```bash
-  yolo detect train model=yolov8n.pt data=dataset_v2.yaml epochs=60 patience=15 imgsz=640 degrees=10 flipud=0.5 project=runs/detect name=v2-real
-  ```
+```bash
+yolo detect train model=yolov8n.pt data=dataset_v2.yaml epochs=60 patience=15 imgsz=640 degrees=10 flipud=0.5
+```
 
-- 驗證集結果：精確率 0.95、召回率 0.68、mAP50 0.77
-- 手機版：匯出成 416×416 的 ONNX 模型。輸入尺寸改小之後 mAP50 一樣是 0.77，但運算量只剩大約 40%
+匯出手機版用的模型：
 
-  ```bash
-  yolo export model=models/scratch_v2.pt format=onnx imgsz=416 opset=12 simplify=True
-  ```
+```bash
+yolo export model=models/scratch_v2.pt format=onnx imgsz=416 opset=12 simplify=True
+```
 
-### 從失敗中學到的事
+## 檔案
 
-第一版模型加了 80 張「白紙畫黑線」的合成圖，驗證分數高達 0.995，但驗證集也都是合成圖，所以這個分數沒有參考價值。實際測試時，模型學到的是「細線就是刮傷」，把新聞截圖的浮水印文字當成刮傷，真正的刮傷反而沒框到。
+```
+app.py              Streamlit 網頁
+docs/               手機即時偵測頁（GitHub Pages）和 ONNX 模型
+models/             訓練好的模型
+build_dataset.py    合併 Roboflow 資料和自己標的照片
+dataset_v2.yaml     訓練用的資料集設定
+data/sop/           SOP 文件
+make_dataset.py     第一版產生合成圖的程式（已不使用）
+test_yolo.py        最一開始測試 YOLO 能不能跑的程式
+test_best.py        測試第一版模型用的
+```
 
-改法：拿掉合成圖，只用真實照片訓練，驗證集也換成真實照片。新模型就能框到真正的刮傷，浮水印也不會再被誤判。
-
-### 目前的限制
-
-- 大約 1/3 的刮傷抓不到（召回率 0.68）
-- 資料以銀色汽車為主，其他顏色和材質的表現比較差
-
-## 4. SOP 怎麼對應？
-
-| YOLO 類別 | SOP 文件 |
-|---|---|
-| `scratch` | `data/sop/SOP-001-刮傷.txt` |
-| （未來）髒污 | `data/sop/SOP-002-髒污.txt` |
-| （未來）印刷偏移 | `data/sop/SOP-003-印刷偏移.txt` |
-
-## 5. 檔案說明
-
-| 路徑 | 用途 |
-|---|---|
-| `app.py` | Streamlit 網頁（多張檢測、電腦鏡頭即時偵測） |
-| `docs/` | 手機即時偵測網頁＋ONNX 模型（GitHub Pages） |
-| `models/scratch_v2.pt` | 訓練好的 YOLOv8 模型 |
-| `build_dataset.py` | 合併 Roboflow 和自己標的照片，產生 `dataset_v2/` |
-| `dataset_v2.yaml` | YOLO 資料集設定 |
-| `data/sop/` | 3 份 SOP |
-| `make_dataset.py` | 第一版的合成圖產生器（已經不用了，留著當紀錄） |
-| `requirements.txt`、`packages.txt` | Streamlit Cloud 部署用 |
-
-## 6. 之後怎麼改進？
-
-- 加入不同顏色的車子、手機、金屬等其他材質的刮傷資料，提高召回率
-- 加入沒有刮傷的照片（乾淨表面、文字、反光），降低誤判
-- 用驗證集調整 `conf` 門檻（目前是 0.25），在漏抓和誤判之間找平衡
-- 接上 LLM 和 RAG，依照瑕疵類型查詢 SOP，讓報告讀起來像人寫的
+訓練照片因為版權不是我的，所以沒有放上來。
 
 ## 資料來源
 
-- 刮傷資料集：Roboflow 匯出的「silver-car-scratch」資料集，授權為 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
-- 自己標註的照片：使用 [makesense.ai](https://www.makesense.ai/) 標註
+- 汽車刮傷資料集：Roboflow「silver-car-scratch」，CC BY 4.0
+- 標註工具：makesense.ai

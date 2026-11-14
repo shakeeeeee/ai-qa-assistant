@@ -47,8 +47,8 @@
 </head>
 <body>
 <main>
-  <h1>🔍 刮傷即時偵測</h1>
-  <p class="sub">AI 品檢助手的手機版。打開鏡頭對準物品表面，掃到刮傷就會直接框出來。模型在你的手機上執行，畫面不會上傳到任何伺服器。</p>
+  <h1>刮傷即時偵測</h1>
+  <p class="sub">打開鏡頭對著物品表面，偵測到刮傷會直接框出來。模型在手機的瀏覽器裡跑，畫面不會上傳。</p>
 
   <div class="stage" id="stage">
     <video id="video" playsinline muted></video>
@@ -71,7 +71,7 @@
 
   <div class="links" id="links"></div>
 
-  <p class="note">模型：YOLOv8n，用約 290 張真實刮傷照片訓練（驗證集 mAP50 0.77），輸入尺寸 416×416，在瀏覽器裡用 ONNX Runtime Web 執行。</p>
+  <p class="note">YOLOv8n，用 292 張汽車刮傷照片訓練（驗證集 mAP50 0.77），輸入 416×416，用 onnxruntime-web 執行。訓練資料以汽車烤漆為主，其他材質的表現會比較差。</p>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
@@ -94,7 +94,7 @@ ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/di
 ort.env.wasm.numThreads = 1;
 
 (function addLinks() {
-  const items = [[STREAMLIT_URL, "📁 完整版：上傳多張照片＋SOP 處理報告"], [REPO_URL, "💻 GitHub 原始碼"]];
+  const items = [[STREAMLIT_URL, "上傳照片版（多張檢查＋SOP）"], [REPO_URL, "GitHub 原始碼"]];
   for (const [url, text] of items) if (url) {
     const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.textContent = text;
     $("links").appendChild(a);
