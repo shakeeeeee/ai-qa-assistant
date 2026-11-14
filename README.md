@@ -8,7 +8,7 @@
 
 - 手機即時偵測：https://shakeeeeee.github.io/ai-qa-assistant/
   （打開鏡頭對著物品掃，有刮傷會直接框出來。沒有鏡頭的話可以按「用照片測試」）
-- 上傳照片版：https://ai-app-assistant-94m3b6tv2ebo5uwauebfzx.streamlit.app/
+- 上傳照片版：https://shakeeeeee-scratch.streamlit.app/
   （可以一次傳多張，會列出哪幾張有刮傷，並顯示 SOP。Streamlit 免費版閒置會休眠，第一次打開要等一下）
 
 ## 做法
