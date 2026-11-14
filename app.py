@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 
 import cv2
 import numpy as np
@@ -12,6 +14,17 @@ CFG = json.load(open("docs/config.json", encoding="utf-8"))
 CLASSES = CFG["classes"]
 MOBILE_LIVE_URL = "https://shakeeeeee.github.io/ai-qa-assistant/"
 
+# log 會印在執行 streamlit 的終端機；Streamlit Cloud 在右下角「Manage app」看得到
+# 不要把金鑰或個人資料寫進 log
+# Streamlit 每次操作都會重跑整個檔案，所以先檢查，避免同一行 log 印好幾次
+log = logging.getLogger("qa")
+if not log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)  # 要看每個框的 GPT 判斷，改成 logging.DEBUG
+    log.propagate = False
+
 st.set_page_config(page_title=CFG["title"])
 st.title(CFG["title"])
 st.write(f"上傳照片，檢查{CFG['product']}有沒有{'、'.join(c['name'] for c in CLASSES)}")
@@ -19,12 +32,14 @@ st.write(f"上傳照片，檢查{CFG['product']}有沒有{'、'.join(c['name'] f
 
 @st.cache_resource
 def load_model():
+    log.info("載入模型 %s", CFG["model_pt"])
     return YOLO(CFG["model_pt"])
 
 
 @st.cache_resource
 def load_gpt(key):
     from openai import OpenAI
+    log.info("已讀到 OpenAI 金鑰，GPT 確認可以使用（%s）", CFG["gpt_model"])
     return OpenAI(api_key=key)
 
 
@@ -43,6 +58,7 @@ gpt = load_gpt(key) if key else None
 # 模型的類別順序要跟設定檔一樣，不一樣就停下來，不然會對應到錯的 SOP
 model_ids = [model.names[i] for i in range(len(model.names))]
 if model_ids != [c["id"] for c in CLASSES]:
+    log.error("類別對不上：設定檔 %s，模型 %s", [c["id"] for c in CLASSES], model_ids)
     st.error(f"設定檔的類別 {[c['id'] for c in CLASSES]} 跟模型的類別 {model_ids} 不一樣，"
              "請修改 docs/config.json 的 classes，順序也要相同")
     st.stop()
@@ -104,11 +120,23 @@ with tab_upload:
     )
 
     if files and st.button(f"開始檢查（{len(files)} 張）"):
+        conf = CFG["conf_with_gpt"] if use_gpt else CFG["conf"]
+        log.info("開始檢查 %d 張照片，GPT 確認=%s，門檻=%.2f", len(files), use_gpt, conf)
+        t_all = time.time()
         with st.spinner("檢查中..."):
             # 手機照片常常是「存成橫的＋標記要轉 90 度」，YOLO 會自己轉正，
             # 這裡也要先轉正，不然框的座標跟照片對不上
             images = [ImageOps.exif_transpose(Image.open(f)).convert("RGB") for f in files]
-            founds = [detect(img, CFG["conf_with_gpt"] if use_gpt else CFG["conf"]) for img in images]
+            founds = []
+            for f, img in zip(files, images):
+                t = time.time()
+                found = detect(img, conf)
+                # 記下照片尺寸和框的位置，框跑到照片外面時（例如方向沒轉正）一看就知道
+                log.info("YOLO %s：%dx%d，找到 %d 個框，%.2f 秒", f.name, img.width, img.height,
+                         len(found), time.time() - t)
+                for box, s, c in found:
+                    log.debug("  %s 分數 %.2f 位置 %s", CLASSES[c]["id"], s, [round(v) for v in box])
+                founds.append(found)
             checks_all = [[None] * len(found) for found in founds]
 
             if use_gpt:
@@ -123,6 +151,9 @@ with tab_upload:
                         labels = [CLASSES[c]["name"] for _, _, c in founds[i]]
                         return i, verify_boxes(gpt, images[i], boxes, labels, CFG), None
                     except Exception as e:
+                        # log.exception 會連錯誤發生在哪一行一起記下來
+                        log.exception("GPT 確認失敗 %s（%dx%d），改用 YOLO 的結果",
+                                      files[i].name, images[i].width, images[i].height)
                         return i, None, e
 
                 # GPT 一張要 2 秒左右，一張一張問太慢，所以同時送出
@@ -140,19 +171,20 @@ with tab_upload:
             results.append((f.name, draw(image, kept, rejected), found, checks, kept))
 
         bad = [r for r in results if r[4]]
+        log.info("檢查完成：%d 張，有瑕疵 %d 張，共 %.1f 秒", len(results), len(bad), time.time() - t_all)
         st.subheader("檢查結果")
         st.write(f"共 {len(results)} 張，有瑕疵 {len(bad)} 張，合格 {len(results) - len(bad)} 張")
         # 手機畫面窄，表格只放兩欄
         st.dataframe(
             [{"檔名": name, "結果": summary(kept) if kept else "合格"}
              for name, _, _, _, kept in results],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
         for name, out, found, checks, kept in results:
             with st.expander(f"{'有瑕疵' if kept else '合格'}｜{name}", expanded=bool(kept)):
-                st.image(out, channels="BGR", use_container_width=True)
+                st.image(out, channels="BGR", width="stretch")
                 if use_gpt and any(checks):
                     st.caption("彩色框：確認是瑕疵　灰框：GPT 判斷不是")
                     st.dataframe(
@@ -161,7 +193,7 @@ with tab_upload:
                           "GPT 確認": ("是" if ch["is_defect"] else "不是") + f"（{ch['what']}）",
                           "理由": ch["reason"]}
                          for (_, s, c), ch in zip(found, checks) if ch],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                 elif kept:

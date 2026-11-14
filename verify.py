@@ -2,11 +2,16 @@
 import base64
 import io
 import json
+import logging
+import time
 
 from openai import OpenAI
 from PIL import Image
 
 MAX_BOXES = 8  # 一張照片最多送幾個框，避免費用失控
+
+# 名稱用 qa. 開頭，才會用到 app.py 設定好的 log 格式
+log = logging.getLogger("qa.verify")
 
 SCHEMA = {
     "type": "object",
@@ -70,12 +75,15 @@ def verify_boxes(client: OpenAI, image: Image.Image, boxes: list, labels: list[s
     if not boxes:
         return []
     sent = boxes[:MAX_BOXES]
+    if len(boxes) > MAX_BOXES:
+        log.warning("框太多（%d 個），只送前 %d 個給 GPT，其他直接當成瑕疵", len(boxes), MAX_BOXES)
     content = [{"type": "text", "text": build_prompt(cfg["product"], cfg["gpt_confusing"], len(sent))}]
     for i, box in enumerate(sent):
         content.append({"type": "text", "text": f"小圖 {i}（懷疑是：{labels[i]}）"})
         content.append({"type": "image_url",
                         "image_url": {"url": to_data_url(crop_box(image, box)), "detail": "low"}})
 
+    start = time.time()
     resp = client.chat.completions.create(
         model=cfg["gpt_model"],
         temperature=0,
@@ -84,11 +92,19 @@ def verify_boxes(client: OpenAI, image: Image.Image, boxes: list, labels: list[s
                          "json_schema": {"name": "verify", "strict": True, "schema": SCHEMA}},
     )
     by_index = {r["index"]: r for r in json.loads(resp.choices[0].message.content)["results"]}
+    rejected = sum(1 for r in by_index.values() if not r["is_defect"])
+    log.info("GPT 回應 %.1f 秒，送 %d 個框，判斷不是瑕疵 %d 個（%s）",
+             time.time() - start, len(sent), rejected, cfg["gpt_model"])
+
+    missing = [i for i in range(len(sent)) if i not in by_index]
+    if missing:
+        log.warning("GPT 漏回第 %s 個框，當成瑕疵處理", missing)
 
     out = []
     for i in range(len(boxes)):
         r = by_index.get(i)
         if r is None:  # 沒送或 GPT 漏回，保守起見當成有瑕疵
             r = {"is_defect": True, "what": "未確認", "reason": "沒有送去確認"}
+        log.debug("框 %d：%s，%s（%s）", i, "是瑕疵" if r["is_defect"] else "不是", r["what"], r["reason"])
         out.append(r)
     return out
