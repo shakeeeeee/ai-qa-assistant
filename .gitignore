@@ -1,0 +1,21 @@
+# 訓練資料：照片版權不屬於本專案（Roboflow 資料集、網路圖片），不上傳
+dataset/
+dataset_v2/
+roboflow_data/
+real_photos/
+labels_*/
+*.zip
+
+# 根目錄的測試照片（網路圖片、新聞截圖）
+/*.jpg
+/*.jpeg
+/*.png
+/*.webp
+
+# 訓練輸出（最終模型已複製到 models/）
+runs/
+yolov8n.pt
+
+# 其他
+__pycache__/
+.claude/

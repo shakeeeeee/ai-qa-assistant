@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>刮傷即時偵測</title>
+<meta name="description" content="AI 品檢助手：用手機鏡頭即時偵測刮傷，YOLOv8 模型直接在瀏覽器裡執行。">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --line: #2a2f3a; --text: #e8eaef; --muted: #9aa1ae;
+    --accent: #4f8cff; --bad: #ff4d4f; --good: #2fbf71;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px 16px 40px; }
+  h1 { font-size: 1.4rem; margin: 4px 0 4px; }
+  .sub { color: var(--muted); font-size: .9rem; margin: 0 0 14px; line-height: 1.5; }
+  .stage { position: relative; background: #000; border-radius: 12px; overflow: hidden;
+    border: 3px solid var(--line); aspect-ratio: 3 / 4; display: grid; place-items: center; }
+  .stage.alert { border-color: var(--bad); }
+  canvas#view { width: 100%; height: 100%; object-fit: contain; display: block; }
+  video { display: none; }
+  .placeholder { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    color: var(--muted); padding: 24px; font-size: .95rem; line-height: 1.6; }
+  .banner { position: absolute; left: 0; right: 0; top: 0; padding: 10px 14px; font-weight: 700;
+    background: rgba(0,0,0,.55); display: flex; justify-content: space-between; gap: 8px; font-size: .95rem; }
+  .banner.bad { background: rgba(255,77,79,.88); }
+  .banner.good { background: rgba(47,191,113,.8); }
+  .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button, label.btn { flex: 1 1 140px; min-height: 48px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); font-size: 1rem; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=file] { display: none; }
+  .slider { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .slider label { display: flex; justify-content: space-between; font-size: .9rem; color: var(--muted); }
+  .slider input { width: 100%; margin-top: 8px; }
+  .links { margin-top: 18px; display: grid; gap: 8px; }
+  .links a { color: var(--accent); text-decoration: none; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; }
+  .note { color: var(--muted); font-size: .8rem; margin-top: 18px; line-height: 1.6; }
+  .status { color: var(--muted); font-size: .85rem; margin-top: 8px; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🔍 刮傷即時偵測</h1>
+  <p class="sub">AI 品檢助手的手機版。打開鏡頭對準物品表面，掃到刮傷就會直接框出來。模型在你的手機上執行，畫面不會上傳到任何伺服器。</p>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="view"></canvas>
+    <div class="placeholder" id="placeholder">按下「開啟鏡頭」開始偵測<br>（第一次會詢問是否允許使用鏡頭）</div>
+    <div class="banner" id="banner" hidden><span id="bannerText"></span><span id="fps"></span></div>
+  </div>
+
+  <div class="row">
+    <button class="primary" id="startBtn" disabled>載入模型中…</button>
+    <button id="flipBtn" hidden>切換前後鏡頭</button>
+    <label class="btn" id="photoBtn">用照片測試<input type="file" id="photoInput" accept="image/*"></label>
+  </div>
+  <div class="status" id="status"></div>
+
+  <div class="slider">
+    <label for="conf"><span>確定度門檻（越低越敏感，誤判也越多）</span><b id="confVal">0.25</b></label>
+    <input type="range" id="conf" min="0.05" max="0.8" step="0.05" value="0.25">
+  </div>
+
+  <div class="links" id="links"></div>
+
+  <p class="note">模型：YOLOv8n，用約 290 張真實刮傷照片訓練（驗證集 mAP50 0.77），輸入尺寸 416×416，在瀏覽器裡用 ONNX Runtime Web 執行。</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script>
+// 部署後把網址填進來，頁面下方就會出現連結
+const STREAMLIT_URL = "";
+const REPO_URL = "https://github.com/shakeeeeee/ai-qa-assistant";
+
+const SIZE = 416;          // 模型輸入尺寸
+const IOU = 0.45;          // 重疊太多的框只留一個
+const $ = (id) => document.getElementById(id);
+const video = $("video"), view = $("view"), ctx = view.getContext("2d");
+const prep = document.createElement("canvas"); prep.width = prep.height = SIZE;
+const pctx = prep.getContext("2d", { willReadFrequently: true });
+
+let session = null, stream = null, facing = "environment", running = false, busy = false;
+let boxes = [], conf = 0.25, lastTimes = [];
+
+ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+ort.env.wasm.numThreads = 1;
+
+(function addLinks() {
+  const items = [[STREAMLIT_URL, "📁 完整版：上傳多張照片＋SOP 處理報告"], [REPO_URL, "💻 GitHub 原始碼"]];
+  for (const [url, text] of items) if (url) {
+    const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.textContent = text;
+    $("links").appendChild(a);
+  }
+})();
+
+async function loadModel() {
+  try {
+    session = await ort.InferenceSession.create("scratch_v2.onnx", { executionProviders: ["wasm"] });
+    $("startBtn").disabled = false; $("startBtn").textContent = "開啟鏡頭";
+  } catch (e) {
+    $("startBtn").textContent = "模型載入失敗"; $("status").textContent = String(e);
+  }
+}
+
+// 把畫面縮放並補灰邊成 416×416（跟 YOLO 訓練時一樣），轉成模型要的格式
+function preprocess(src, w, h) {
+  const scale = Math.min(SIZE / w, SIZE / h);
+  const nw = Math.round(w * scale), nh = Math.round(h * scale);
+  const px = (SIZE - nw) / 2, py = (SIZE - nh) / 2;
+  pctx.fillStyle = "rgb(114,114,114)"; pctx.fillRect(0, 0, SIZE, SIZE);
+  pctx.drawImage(src, px, py, nw, nh);
+  const d = pctx.getImageData(0, 0, SIZE, SIZE).data;
+  const n = SIZE * SIZE, arr = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    arr[i] = d[i * 4] / 255; arr[i + n] = d[i * 4 + 1] / 255; arr[i + 2 * n] = d[i * 4 + 2] / 255;
+  }
+  return { tensor: new ort.Tensor("float32", arr, [1, 3, SIZE, SIZE]), scale, px, py };
+}
+
+function iou(a, b) {
+  const x1 = Math.max(a.x1, b.x1), y1 = Math.max(a.y1, b.y1), x2 = Math.min(a.x2, b.x2), y2 = Math.min(a.y2, b.y2);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  return inter / ((a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter);
+}
+
+async function detect(src, w, h) {
+  const { tensor, scale, px, py } = preprocess(src, w, h);
+  const out = (await session.run({ images: tensor })).output0;   // [1, 5, N]：cx, cy, w, h, 分數
+  const N = out.dims[2], d = out.data, found = [];
+  for (let i = 0; i < N; i++) {
+    const s = d[4 * N + i];
+    if (s < conf) continue;
+    const cx = d[i], cy = d[N + i], bw = d[2 * N + i], bh = d[3 * N + i];
+    found.push({ s,
+      x1: (cx - bw / 2 - px) / scale, y1: (cy - bh / 2 - py) / scale,
+      x2: (cx + bw / 2 - px) / scale, y2: (cy + bh / 2 - py) / scale });
+  }
+  found.sort((a, b) => b.s - a.s);
+  const keep = [];
+  for (const b of found) if (keep.every((k) => iou(k, b) < IOU)) keep.push(b);
+  return keep;
+}
+
+function draw(src, w, h) {
+  if (view.width !== w || view.height !== h) {
+    view.width = w; view.height = h;
+    $("stage").style.aspectRatio = `${w} / ${h}`;   // 外框跟著畫面比例，不留黑邊
+  }
+  ctx.drawImage(src, 0, 0, w, h);
+  const lw = Math.max(3, Math.round(w / 160)), fs = Math.max(16, Math.round(w / 28));
+  ctx.lineWidth = lw; ctx.font = `bold ${fs}px system-ui, sans-serif`;
+  for (const b of boxes) {
+    ctx.strokeStyle = "#ff4d4f"; ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+    const t = `刮傷 ${b.s.toFixed(2)}`, tw = ctx.measureText(t).width + 10;
+    const ty = Math.max(0, b.y1 - fs - 6);
+    ctx.fillStyle = "#ff4d4f"; ctx.fillRect(b.x1 - lw / 2, ty, tw, fs + 6);
+    ctx.fillStyle = "#fff"; ctx.fillText(t, b.x1 + 4, ty + fs);
+  }
+  const bad = boxes.length > 0;
+  $("stage").classList.toggle("alert", bad);
+  $("banner").hidden = false;
+  $("banner").className = "banner " + (bad ? "bad" : "good");
+  $("bannerText").textContent = bad ? `⚠️ 發現 ${boxes.length} 處刮傷（最高 ${boxes[0].s.toFixed(2)}）` : "✅ 目前沒有發現刮傷";
+}
+
+async function tick() {
+  if (!running) return;
+  if (video.readyState >= 2) {
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!busy) {
+      busy = true;
+      const t0 = performance.now();
+      detect(video, w, h).then((r) => {
+        boxes = r; busy = false;
+        lastTimes.push(performance.now() - t0); if (lastTimes.length > 10) lastTimes.shift();
+        const avg = lastTimes.reduce((a, b) => a + b, 0) / lastTimes.length;
+        $("fps").textContent = `${(1000 / avg).toFixed(1)} 次/秒`;
+      }).catch((e) => { busy = false; $("status").textContent = String(e); });
+    }
+    draw(video, w, h);
+  }
+  requestAnimationFrame(tick);
+}
+
+async function startCamera() {
+  stopCamera();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  } catch (e) {
+    $("status").textContent = "無法開啟鏡頭：" + (e.message || e) + "（請確認瀏覽器有允許使用鏡頭）";
+    return;
+  }
+  video.srcObject = stream; await video.play();
+  $("placeholder").hidden = true; $("flipBtn").hidden = false; $("status").textContent = "";
+  $("startBtn").textContent = "關閉鏡頭";
+  running = true; requestAnimationFrame(tick);
+}
+
+function stopCamera() {
+  running = false;
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  $("startBtn").textContent = "開啟鏡頭"; $("flipBtn").hidden = true;
+}
+
+$("startBtn").onclick = () => (stream ? stopCamera() : startCamera());
+$("flipBtn").onclick = () => { facing = facing === "environment" ? "user" : "environment"; startCamera(); };
+$("conf").oninput = (e) => { conf = +e.target.value; $("confVal").textContent = conf.toFixed(2); };
+
+$("photoInput").onchange = async (e) => {
+  const file = e.target.files[0]; if (!file || !session) return;
+  stopCamera();
+  const img = new Image(); img.src = URL.createObjectURL(file); await img.decode();
+  const t0 = performance.now();
+  boxes = await detect(img, img.naturalWidth, img.naturalHeight);
+  $("placeholder").hidden = true; draw(img, img.naturalWidth, img.naturalHeight);
+  $("fps").textContent = `${Math.round(performance.now() - t0)} ms`;
+  e.target.value = "";
+};
+
+loadModel();
+</script>
+</body>
+</html>

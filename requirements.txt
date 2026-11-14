@@ -1,0 +1,9 @@
+# 雲端只需要 CPU 版的 PyTorch，比 GPU 版小很多
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+ultralytics>=8.4
+opencv-python-headless
+streamlit>=1.67
+streamlit-webrtc>=0.79
+pillow
