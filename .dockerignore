@@ -1,0 +1,9 @@
+# 預設全部不放進映像檔，只列出執行 app.py 需要的檔案
+# 這樣訓練照片、個人筆記、金鑰都不會被打包進去
+*
+!app.py
+!verify.py
+!requirements.txt
+!docs/config.json
+!data/sop/
+!models/scratch_v2.pt

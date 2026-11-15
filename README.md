@@ -9,7 +9,7 @@
 - 手機即時偵測：https://shakeeeeee.github.io/ai-qa-assistant/
   （打開鏡頭對著物品掃，有刮傷會直接框出來。沒有鏡頭的話可以按「用照片測試」）
 - 上傳照片版：https://shakeeeeee-scratch.streamlit.app/
-  （可以一次傳多張，會列出哪幾張有刮傷，並顯示 SOP。檢查完可以下載 CSV 報告。Streamlit 免費版閒置會休眠，第一次打開要等一下）
+  （可以一次傳多張，會列出哪幾張有刮傷，並顯示 SOP。檢查完可以下載兩種 CSV：給品管看的檢查報告（一張照片一列，寫出合不合格和處理方式），以及給工程師分析誤判用的詳細資料（每個框一列）。Streamlit 免費版閒置會休眠，第一次打開要等一下）
 
 ## 做法
 
@@ -122,6 +122,24 @@ streamlit run app.py
 
 要用 GPT 確認的話，建立 `.streamlit/secrets.toml`，寫入 `OPENAI_API_KEY = "你的金鑰"`。沒有設定就只會用 YOLO。
 
+### 用 Docker 執行
+
+不想自己裝 Python 套件的話，可以用 Docker：
+
+```bash
+docker build -t ai-qa-assistant .
+```
+
+```bash
+docker run --rm -p 8501:8501 ai-qa-assistant
+```
+
+打開 http://localhost:8501 。映像檔裡只有執行需要的檔案（見 `.dockerignore`），不含金鑰。要用 GPT 確認的話，執行時把金鑰檔掛進去：
+
+```bash
+docker run --rm -p 8501:8501 -v "$PWD/.streamlit/secrets.toml:/app/.streamlit/secrets.toml:ro" ai-qa-assistant
+```
+
 重新訓練的話，先把 Roboflow 匯出的 YOLOv8 格式資料解壓到 `roboflow_data/`，然後：
 
 ```bash
@@ -142,6 +160,8 @@ yolo export model=models/scratch_v2.pt format=onnx imgsz=416 opset=12 simplify=T
 
 ```
 app.py              Streamlit 網頁
+Dockerfile          用 Docker 打包上傳照片版
+.dockerignore       打包時只放進執行需要的檔案
 verify.py           把 YOLO 的框裁成小圖交給 GPT 確認
 eval_verify.py      在驗證集上比較有沒有加 GPT 的差別
 docs/               手機即時偵測頁（GitHub Pages）和 ONNX 模型

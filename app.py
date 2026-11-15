@@ -108,8 +108,43 @@ def summary(kept):
     return "、".join(f"{CLASSES[c]['name']} {n}" for c, n in sorted(counts.items()))
 
 
-def make_report(results, checked_at, conf, use_gpt):
-    """產生 CSV 報告：每個框一列，沒有框的照片也留一列「合格」"""
+def to_csv(rows):
+    buf = io.StringIO()
+    csv.writer(buf).writerows(rows)
+    # Excel 要有 BOM（utf-8-sig）才會正確顯示中文，不然會變亂碼
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def make_report(results, checked_at):
+    """給品管看的報告：一張照片一列，直接寫結論和下一步"""
+    rows = [["檢查時間", "照片", "結果", "瑕疵", "說明", "處理方式"]]
+    for name, _, found, checks, kept in results:
+        if kept:
+            counts = {}
+            for _, _, c in kept:
+                counts[c] = counts.get(c, 0) + 1
+            defects = "、".join(f"{CLASSES[c]['name']} {n} 處" for c, n in sorted(counts.items()))
+            scores = sorted(round(s * 100) for _, s, _ in kept)
+            notes = [f"模型把握度 {scores[0]}%" if len(scores) == 1
+                     else f"模型把握度 {scores[0]}%～{scores[-1]}%"]
+            todo = "；".join(f"依 {CLASSES[c]['sop'].split('/')[-1].removesuffix('.txt')} 判斷輕重"
+                            for c in sorted(counts))
+        else:
+            defects, notes, todo = "", [], "可以放行"
+        # GPT 排除掉的框也寫一句，讓人知道系統有看到、但判斷不是瑕疵
+        excluded = [ch["what"] for ch in checks if ch is not None and not ch["is_defect"]]
+        if excluded:
+            # GPT 有時判斷「不是」，卻在「看到什麼」照抄瑕疵名稱，這種就不寫進括號，免得看起來矛盾
+            seen = sorted({w for w in excluded if w not in {c["name"] for c in CLASSES}})
+            notes.append(f"另有 {len(excluded)} 處經 GPT 確認不是瑕疵"
+                         + (f"（{'、'.join(seen)}）" if seen else ""))
+        rows.append([checked_at.strftime("%Y-%m-%d %H:%M"), name,
+                     "不合格" if kept else "合格", defects, "；".join(notes), todo])
+    return to_csv(rows)
+
+
+def make_detail(results, checked_at, conf, use_gpt):
+    """給工程師看的詳細資料：每個框一列，沒有框的照片也留一列「合格」"""
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["檢查時間", "檔名", "照片結果", "類別", "算不算瑕疵", "YOLO 分數",
@@ -213,12 +248,22 @@ with tab_upload:
             hide_index=True,
         )
         # on_click="ignore"：按下載不會重跑整頁，結果才不會消失
-        st.download_button(
-            "下載檢查報告（CSV，Excel 可以開）",
-            make_report(results, checked_at, conf, use_gpt),
+        col1, col2 = st.columns(2)
+        col1.download_button(
+            "下載檢查報告",
+            make_report(results, checked_at),
             file_name=f"檢查報告_{checked_at:%Y%m%d_%H%M}.csv",
             mime="text/csv",
             on_click="ignore",
+            help="一張照片一列，寫出合不合格和處理方式。CSV 檔，Excel 可以開",
+        )
+        col2.download_button(
+            "下載詳細資料（工程師用）",
+            make_detail(results, checked_at, conf, use_gpt),
+            file_name=f"詳細資料_{checked_at:%Y%m%d_%H%M}.csv",
+            mime="text/csv",
+            on_click="ignore",
+            help="每個框一列，包含分數、GPT 理由、框的位置、模型和門檻，用來分析誤判",
         )
 
         for name, out, found, checks, kept in results:
